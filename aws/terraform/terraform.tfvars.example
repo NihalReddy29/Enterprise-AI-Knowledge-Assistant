@@ -1,0 +1,25 @@
+aws_region   = "us-east-1"
+project_name = "enterprise-ai-assistant"
+environment  = "production"
+
+# Generate with: openssl rand -hex 32
+secret_key = "REPLACE_WITH_LONG_RANDOM_SECRET"
+
+# Optional model providers
+openai_api_key    = ""
+anthropic_api_key = ""
+
+default_llm_provider       = "openai"
+default_embedding_provider = "openai"
+vector_store               = "qdrant"
+
+# Use 0 + Qdrant Cloud / Pinecone if you don't want self-hosted Qdrant
+qdrant_desired_count = 1
+
+db_instance_class = "db.t4g.micro"
+backend_desired_count  = 1
+frontend_desired_count = 1
+
+# Optional: pin to an existing VPC/subnets
+# vpc_id = "vpc-xxxxxxxx"
+# public_subnet_ids = ["subnet-aaa", "subnet-bbb"]

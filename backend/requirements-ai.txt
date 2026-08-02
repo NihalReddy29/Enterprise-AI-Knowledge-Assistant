@@ -1,0 +1,9 @@
+# Optional AI / vector backends for Phase 3+
+# Install only what you need:
+#   pip install -r requirements-ai.txt
+# Or individually:
+#   pip install google-generativeai sentence-transformers chromadb
+
+google-generativeai==0.8.6
+sentence-transformers==5.2.2
+chromadb==1.5.0

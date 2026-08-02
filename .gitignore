@@ -1,0 +1,22 @@
+.env
+.DS_Store
+Thumbs.db
+
+# Backend
+backend/venv/
+backend/storage/
+backend/test_storage/
+backend/chroma_db/
+backend/.pytest_cache/
+backend/__pycache__/
+backend/**/__pycache__/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Terraform
+aws/terraform/.terraform/
+aws/terraform/*.tfstate*
+aws/terraform/terraform.tfvars
+aws/terraform/.terraform.lock.hcl
