@@ -87,7 +87,7 @@ Frontend: http://localhost:5173 (proxies `/api` → backend)
 ---
 
 ## Project Layout
-
+```
 enterprise-ai-assistant/
 ├── backend/                          # FastAPI + RAG pipeline
 │   ├── alembic/versions/             # DB migrations
@@ -118,7 +118,7 @@ enterprise-ai-assistant/
 │       └── pages/                    # Chat, Documents, Organizations
 ├── docker-compose.yml
 └── .env.example
-
+```
 ---
 
 ## Architecture
