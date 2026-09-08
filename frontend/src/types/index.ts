@@ -26,6 +26,7 @@ export interface DocumentItem {
   filename: string
   file_type: string
   owner_id: number
+  org_id?: number | null
   file_size: number
   page_count: number | null
   chunk_count: number | null
@@ -89,6 +90,50 @@ export interface ChatQueryResponse {
   answer: string
   citations: Citation[]
   message_id: number
+  provider: string
+  model: string
+  insufficient_information: boolean
+}
+
+export type OrgRole = 'owner' | 'admin' | 'member'
+
+export interface OrgMember {
+  id: number
+  org_id: number
+  user_id: number
+  role: OrgRole
+  joined_at: string
+  user_email?: string | null
+  user_name?: string | null
+}
+
+export interface Organization {
+  id: number
+  name: string
+  slug: string
+  created_by: number | null
+  created_at: string
+  member_count: number
+  my_role?: OrgRole | null
+}
+
+export interface OrgDetail extends Organization {
+  members: OrgMember[]
+}
+
+export interface InviteResponse {
+  id: number
+  org_id: number
+  email: string
+  role: OrgRole
+  token: string
+  invite_url: string
+  created_at: string
+}
+
+export interface StreamDoneEvent {
+  answer: string
+  citations: Citation[]
   provider: string
   model: string
   insufficient_information: boolean

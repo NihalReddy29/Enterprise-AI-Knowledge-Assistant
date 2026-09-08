@@ -111,6 +111,8 @@ class InMemoryVectorStore(VectorStore):
                     continue
                 if "document_ids" in filters and payload.get("document_id") not in filters["document_ids"]:
                     continue
+                if "org_id" in filters and payload.get("org_id") != filters["org_id"]:
+                    continue
             score = _cosine_similarity(query_vector, record["vector"])
             scored.append((score, payload))
 
@@ -154,17 +156,50 @@ class QdrantVectorStore(VectorStore):
         self.client = QdrantClient(**kwargs)
         self.collection = settings.qdrant_collection
 
-    def ensure_collection(self, dimension: int) -> None:
+    def ensure_collection(self, dimension: int, collection_name: str | None = None) -> None:
+        target = collection_name or self.collection
         existing = {c.name for c in self.client.get_collections().collections}
-        if self.collection in existing:
-            return
-        self.client.create_collection(
-            collection_name=self.collection,
-            vectors_config=self._models.VectorParams(
-                size=dimension,
-                distance=self._models.Distance.COSINE,
-            ),
-        )
+        if target not in existing:
+            self.client.create_collection(
+                collection_name=target,
+                vectors_config=self._models.VectorParams(
+                    size=dimension,
+                    distance=self._models.Distance.COSINE,
+                ),
+            )
+        # Ensure payload schema indexes exist for sub-10ms filtered HNSW search
+        for field_name in ["org_id", "owner_id", "document_id"]:
+            try:
+                self.client.create_payload_index(
+                    collection_name=target,
+                    field_name=field_name,
+                    field_schema=self._models.PayloadSchemaType.KEYWORD,
+                )
+            except Exception as e:
+                logger.debug("Payload index for %s may already exist: %s", field_name, e)
+
+    def create_shadow_collection(self, shadow_name: str, dimension: int) -> None:
+        """Create a new shadow collection for zero-downtime reindexing."""
+        self.ensure_collection(dimension=dimension, collection_name=shadow_name)
+
+    def swap_alias(self, alias_name: str, new_collection_name: str, old_collection_name: str | None = None) -> None:
+        """Atomically swap alias to point to new shadow collection."""
+        actions = [
+            self._models.CreateAliasOperation(
+                create_alias=self._models.CreateAlias(
+                    alias_name=alias_name,
+                    collection_name=new_collection_name,
+                )
+            )
+        ]
+        if old_collection_name:
+            actions.insert(
+                0,
+                self._models.DeleteAliasOperation(
+                    delete_alias=self._models.DeleteAlias(alias_name=alias_name)
+                ),
+            )
+        self.client.update_collection_aliases(change_aliases_operations=actions)
 
     def upsert(
         self,
@@ -257,6 +292,13 @@ class QdrantVectorStore(VectorStore):
                     match=self._models.MatchAny(any=list(filters["document_ids"])),
                 )
             )
+        if "org_id" in filters:
+            conditions.append(
+                self._models.FieldCondition(
+                    key="org_id",
+                    match=self._models.MatchValue(value=filters["org_id"]),
+                )
+            )
         if not conditions:
             return None
         return self._models.Filter(must=conditions)
@@ -277,10 +319,37 @@ class ChromaVectorStore(VectorStore):
         self._collection = None
 
     def ensure_collection(self, dimension: int) -> None:
-        self._collection = self.client.get_or_create_collection(
-            name=self.collection_name,
-            metadata={"hnsw:space": "cosine", "dimension": dimension},
-        )
+        try:
+            existing = self.client.get_collection(name=self.collection_name)
+            existing_dim = existing.metadata.get("dimension") if existing.metadata else None
+
+            # Treat "no dimension recorded" the same as "mismatched dimension" —
+            # an untracked collection cannot be assumed compatible with the
+            # currently configured embedding provider/dimension.
+            if existing_dim is None or int(existing_dim) != dimension:
+                reason = (
+                    "no dimension metadata recorded (likely created before "
+                    "dimension tracking existed, or under a different embedding provider)"
+                    if existing_dim is None
+                    else f"dimension mismatch ({existing_dim} vs {dimension})"
+                )
+                logger.warning(
+                    "ChromaDB collection '%s': %s. Deleting and recreating collection. "
+                    "All previously indexed documents must be re-indexed.",
+                    self.collection_name, reason,
+                )
+                self.client.delete_collection(name=self.collection_name)
+                self._collection = self.client.create_collection(
+                    name=self.collection_name,
+                    metadata={"hnsw:space": "cosine", "dimension": dimension},
+                )
+            else:
+                self._collection = existing
+        except Exception:
+            self._collection = self.client.get_or_create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": "cosine", "dimension": dimension},
+            )
 
     @property
     def collection(self):
@@ -320,9 +389,14 @@ class ChromaVectorStore(VectorStore):
         if filters:
             clauses = []
             if "document_id" in filters:
-                clauses.append({"document_id": filters["document_id"]})
+                clauses.append({"document_id": {"$eq": filters["document_id"]}})
             if "owner_id" in filters:
-                clauses.append({"owner_id": filters["owner_id"]})
+                clauses.append({"owner_id": {"$eq": filters["owner_id"]}})
+            if "org_id" in filters:
+                clauses.append({"org_id": {"$eq": filters["org_id"]}})
+            if "document_ids" in filters and filters["document_ids"]:
+                # ChromaDB $in operator for list-based document ID filtering
+                clauses.append({"document_id": {"$in": [int(d) for d in filters["document_ids"]]}})
             if len(clauses) == 1:
                 where = clauses[0]
             elif len(clauses) > 1:
@@ -405,6 +479,8 @@ class PineconeVectorStore(VectorStore):
                 pinecone_filter["document_id"] = {"$eq": filters["document_id"]}
             if "owner_id" in filters:
                 pinecone_filter["owner_id"] = {"$eq": filters["owner_id"]}
+            if "org_id" in filters:
+                pinecone_filter["org_id"] = {"$eq": filters["org_id"]}
 
         response = self.index.query(
             vector=query_vector,
@@ -477,7 +553,15 @@ def reset_vector_store() -> None:
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    if len(a) != len(b) or not a:
+    if not a or not b:
+        return 0.0
+    if len(a) != len(b):
+        logger.error(
+            "Cosine similarity dimension mismatch: query vector has %d dims, "
+            "stored vector has %d dims. This indicates an embedding provider/dimension "
+            "change without re-indexing. Returning 0.0 (fails grounding checks).",
+            len(a), len(b),
+        )
         return 0.0
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = math.sqrt(sum(x * x for x in a)) or 1.0

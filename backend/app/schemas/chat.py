@@ -25,6 +25,7 @@ class ChatQueryRequest(BaseModel):
     document_ids: list[int] | None = None
     top_k: int | None = Field(default=None, ge=1, le=20)
     compare: bool = False
+    org_id: int | None = None
 
 
 class MessageResponse(BaseModel):

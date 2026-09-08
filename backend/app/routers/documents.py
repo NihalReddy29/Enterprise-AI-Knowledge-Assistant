@@ -3,7 +3,7 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 
-from app.models.user import Document, DocumentStatus, User, UserRole
+from app.models.user import Document, DocumentStatus, OrgMember, User, UserRole
 from app.schemas.document import (
     DocumentContentResponse,
     DocumentHighlightResponse,
@@ -13,6 +13,7 @@ from app.schemas.document import (
     ExtractedPageResponse,
     HighlightMatch,
 )
+from app.schemas.org import PublishDocRequest
 from app.services.document_processor import get_document_processor
 from app.services.storage import get_storage_backend
 from app.utils.dependencies import CurrentUser, DbSession
@@ -36,16 +37,26 @@ MIME_BY_TYPE = {
 }
 
 
-def _can_access_document(user: User, document: Document) -> bool:
-    """Employees can only access their own documents; admins can access all."""
-    return user.role == UserRole.ADMIN or document.owner_id == user.id
+def _can_access_document(db: DbSession, user: User, document: Document) -> bool:
+    """Access allowed if admin, document owner, or user belongs to the document's org."""
+    if user.role == UserRole.ADMIN or document.owner_id == user.id:
+        return True
+    if document.org_id:
+        membership = (
+            db.query(OrgMember)
+            .filter(OrgMember.org_id == document.org_id, OrgMember.user_id == user.id)
+            .first()
+        )
+        if membership:
+            return True
+    return False
 
 
 def _get_accessible_document(db: DbSession, document_id: int, user: User) -> Document:
     document = db.query(Document).filter(Document.id == document_id).first()
     if not document:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
-    if not _can_access_document(user, document):
+    if not _can_access_document(db, user, document):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
     return document
 
@@ -61,10 +72,24 @@ async def upload_document(
     background_tasks: BackgroundTasks,
     db: DbSession,
     current_user: CurrentUser,
+    org_id: int | None = Query(default=None),
 ) -> DocumentUploadResponse:
     """Upload a document file. Processing runs in the background."""
     file_data = await file.read()
     file_type = validate_upload_file(file, len(file_data))
+
+    if org_id:
+        # Check org membership
+        mem = (
+            db.query(OrgMember)
+            .filter(OrgMember.org_id == org_id, OrgMember.user_id == current_user.id)
+            .first()
+        )
+        if not mem and current_user.role != UserRole.ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not a member of the target organization",
+            )
 
     storage = get_storage_backend()
     safe_filename = sanitize_filename(file.filename or "document")
@@ -75,6 +100,7 @@ async def upload_document(
         filename=safe_filename,
         file_type=file_type,
         owner_id=current_user.id,
+        org_id=org_id,
         storage_path=storage_path,
         file_size=len(file_data),
         status=DocumentStatus.PENDING,
@@ -99,13 +125,39 @@ async def upload_document(
 def list_documents(
     db: DbSession,
     current_user: CurrentUser,
+    org_id: int | None = Query(default=None),
     skip: int = 0,
     limit: int = 50,
 ) -> DocumentListResponse:
-    """List documents. Admins see all; employees see only their own."""
+    """List documents. Optionally filter by org_id. Admins see all; employees see owned or org docs."""
     query = db.query(Document)
-    if current_user.role != UserRole.ADMIN:
-        query = query.filter(Document.owner_id == current_user.id)
+
+    if org_id is not None:
+        # Validate membership if not admin
+        if current_user.role != UserRole.ADMIN:
+            mem = (
+                db.query(OrgMember)
+                .filter(OrgMember.org_id == org_id, OrgMember.user_id == current_user.id)
+                .first()
+            )
+            if not mem:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not a member of this organization",
+                )
+        query = query.filter(Document.org_id == org_id)
+    elif current_user.role != UserRole.ADMIN:
+        # Show owned documents OR documents belonging to user's orgs
+        user_org_ids = [
+            m.org_id
+            for m in db.query(OrgMember).filter(OrgMember.user_id == current_user.id).all()
+        ]
+        if user_org_ids:
+            query = query.filter(
+                (Document.owner_id == current_user.id) | (Document.org_id.in_(user_org_ids))
+            )
+        else:
+            query = query.filter(Document.owner_id == current_user.id)
 
     total = query.count()
     documents = (
@@ -129,6 +181,79 @@ def get_document(
 ) -> Document:
     """Get metadata for a single document."""
     return _get_accessible_document(db, document_id, current_user)
+
+
+@router.patch(
+    "/{document_id}/publish",
+    response_model=DocumentResponse,
+    summary="Publish document to an organization library",
+)
+def publish_document(
+    document_id: int,
+    payload: PublishDocRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+    background_tasks: BackgroundTasks,
+) -> Document:
+    """Share document to an org's shared library."""
+    document = _get_accessible_document(db, document_id, current_user)
+    if document.owner_id != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only document owner or admin can publish to an organization",
+        )
+
+    # Check org membership
+    mem = (
+        db.query(OrgMember)
+        .filter(OrgMember.org_id == payload.org_id, OrgMember.user_id == current_user.id)
+        .first()
+    )
+    if not mem and current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a member of the target organization",
+        )
+
+    document.org_id = payload.org_id
+    db.commit()
+    db.refresh(document)
+
+    # Re-index in the background to update vector store payload with org_id
+    if document.status == DocumentStatus.INDEXED:
+        background_tasks.add_task(process_document, document.id)
+
+    return document
+
+
+@router.delete(
+    "/{document_id}/unpublish",
+    response_model=DocumentResponse,
+    summary="Unpublish document from organization library",
+)
+def unpublish_document(
+    document_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    background_tasks: BackgroundTasks,
+) -> Document:
+    """Remove document from organization shared library back to personal only."""
+    document = _get_accessible_document(db, document_id, current_user)
+    if document.owner_id != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only document owner or admin can unpublish",
+        )
+
+    document.org_id = None
+    db.commit()
+    db.refresh(document)
+
+    # Re-index in the background to update vector store payload
+    if document.status == DocumentStatus.INDEXED:
+        background_tasks.add_task(process_document, document.id)
+
+    return document
 
 
 @router.get(

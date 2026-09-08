@@ -52,7 +52,19 @@ class RecursiveCharacterTextSplitter:
     ) -> None:
         self.chunk_size = chunk_size or settings.chunk_size
         self.chunk_overlap = chunk_overlap if chunk_overlap is not None else settings.chunk_overlap
-        self.separators = separators or ["\n\n", "\n", ". ", " ", ""]
+        self.separators = separators or [
+            "\n# ",
+            "\n## ",
+            "\n### ",
+            "\n\n",
+            "\n|",
+            "\n- ",
+            "\n* ",
+            "\n",
+            ". ",
+            " ",
+            "",
+        ]
 
         if self.chunk_overlap >= self.chunk_size:
             raise ValueError("chunk_overlap must be smaller than chunk_size")

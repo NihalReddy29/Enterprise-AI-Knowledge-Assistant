@@ -2,24 +2,32 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import asdict, dataclass, field
+from typing import Generator
 
 from app.config import get_settings
+from app.services.context_validator import ContextValidator, REFUSAL_MESSAGE
 from app.services.indexing import IndexingService, get_indexing_service
 from app.services.llm import LLMService, get_llm_service
+from app.services.query_processor import preprocess_query
+from app.services.reranker import RerankerService, get_reranker_service
 from app.services.vector_store import SearchResult
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-SYSTEM_PROMPT = """You are an enterprise assistant.
+SYSTEM_PROMPT = """You are an enterprise knowledge assistant. You ONLY answer questions using the document context provided below.
 
-Answer only using the provided context.
-If the answer is unavailable say:
-"I don't have enough information."
-
-Always provide citations."""
+Rules:
+- Base your answer EXCLUSIVELY on the provided document context. Do NOT use general knowledge or training data.
+- Always cite which document(s) you used (e.g., [1], [2]).
+- Write clear, complete, accurate answers using full sentences.
+- If the provided context does not contain enough information to answer the question, say exactly: "I don't have enough information in the uploaded documents to answer this question." Do NOT guess or use outside knowledge.
+- Never say things like "based on general knowledge" or answer as if you were a search engine.
+- When the answer spans multiple documents, summarize each document's perspective.
+- Avoid repetition. Be concise but thorough."""
 
 
 @dataclass
@@ -57,9 +65,17 @@ class RAGService:
         self,
         indexing: IndexingService | None = None,
         llm: LLMService | None = None,
+        reranker: RerankerService | None = None,
+        context_validator: ContextValidator | None = None,
     ) -> None:
         self.indexing = indexing or get_indexing_service()
         self.llm = llm or get_llm_service()
+        self.reranker = reranker or get_reranker_service()
+        self.context_validator = context_validator or ContextValidator()
+
+    # ------------------------------------------------------------------
+    # Standard (non-streaming) path
+    # ------------------------------------------------------------------
 
     def ask(
         self,
@@ -69,46 +85,236 @@ class RAGService:
         top_k: int | None = None,
         chat_history: list[dict[str, str]] | None = None,
         compare_mode: bool = False,
+        org_id: int | None = None,
     ) -> RAGResult:
-        """Run the full RAG pipeline for a user question."""
-        k = top_k or settings.rag_top_k
-        chunks = self.indexing.search(
-            query=question,
-            top_k=k,
-            owner_id=owner_id,
-            document_ids=document_ids,
-        )
+        """Run the full RAG pipeline via LangGraph Corrective-RAG orchestrator."""
+        from app.services.langgraph_orchestrator import build_corrective_rag_graph
 
-        citations = self._build_citations(chunks)
-        context = self._format_context(chunks)
-        user_prompt = self._build_user_prompt(
-            question=question,
-            context=context,
-            chat_history=chat_history,
-            compare_mode=compare_mode,
-        )
+        initial_state = {
+            "question": question,
+            "owner_id": owner_id,
+            "document_ids": document_ids,
+            "top_k": top_k or settings.vector_search_top_k,
+            "chat_history": chat_history,
+            "compare_mode": compare_mode,
+            "org_id": org_id,
+            "rewrite_count": 0,
+            "generation_count": 0,
+            "max_rewrites": 2,
+            "max_generations": 2,
+            "indexing_service": self.indexing,
+            "llm_service": self.llm,
+            "reranker_service": self.reranker,
+            "context_validator": self.context_validator,
+        }
 
-        llm_response = self.llm.generate(SYSTEM_PROMPT, user_prompt)
-        answer = llm_response.content.strip()
-        insufficient = self._is_insufficient(answer, chunks)
+        graph = build_corrective_rag_graph()
+        final_state = graph.invoke(initial_state)
 
-        if insufficient:
-            answer = "I don't have enough information."
-            # Keep citations empty when we cannot ground the answer
-            if not chunks:
-                citations = []
-
-        if compare_mode and chunks and not insufficient:
-            answer = self._maybe_format_comparison(answer, chunks)
+        answer = final_state.get("answer", REFUSAL_MESSAGE)
+        raw_citations = final_state.get("citations", [])
+        citations = [
+            Citation(
+                index=c["index"],
+                document=c.get("document"),
+                document_id=c.get("document_id", 0),
+                page_number=c.get("page_number"),
+                section=c.get("section"),
+                text=c.get("text", ""),
+                similarity_score=c.get("similarity_score", 0.0),
+            )
+            for c in raw_citations
+        ]
+        retrieved_chunks = [c.to_dict() for c in final_state.get("graded_chunks", []) or final_state.get("retrieved_chunks", [])]
 
         return RAGResult(
             answer=answer,
-            citations=citations if not insufficient or chunks else [],
-            retrieved_chunks=[chunk.to_dict() for chunk in chunks],
-            provider=llm_response.provider,
-            model=llm_response.model,
-            insufficient_information=insufficient,
+            citations=citations,
+            retrieved_chunks=retrieved_chunks,
+            provider=final_state.get("llm_provider", self.llm.provider_name),
+            model=final_state.get("llm_model", self.llm.model_name),
+            insufficient_information=final_state.get("insufficient_information", False),
         )
+
+    # ------------------------------------------------------------------
+    # Streaming path
+    # ------------------------------------------------------------------
+
+    def ask_stream(
+        self,
+        question: str,
+        owner_id: int | None = None,
+        document_ids: list[int] | None = None,
+        top_k: int | None = None,
+        chat_history: list[dict[str, str]] | None = None,
+        compare_mode: bool = False,
+        org_id: int | None = None,
+    ) -> Generator[str, None, dict]:
+        """Yield SSE-formatted tokens using LangGraph Corrective-RAG pipeline.
+
+        Emits text tokens as: ``data: <json>\\n\\n``
+        Final sentinel:       ``data: [DONE] <json>\\n\\n``
+        """
+        # Run the full Corrective-RAG graph (same as non-streaming ask())
+        # but stream the final generation step for perceived responsiveness.
+        from app.services.langgraph_orchestrator import build_corrective_rag_graph
+
+        initial_state = {
+            "question": question,
+            "owner_id": owner_id,
+            "document_ids": document_ids,
+            "top_k": top_k or settings.vector_search_top_k,
+            "chat_history": chat_history,
+            "compare_mode": compare_mode,
+            "org_id": org_id,
+            "rewrite_count": 0,
+            "generation_count": 0,
+            "max_rewrites": 2,
+            "max_generations": 2,
+            "indexing_service": self.indexing,
+            "llm_service": self.llm,
+            "reranker_service": self.reranker,
+            "context_validator": self.context_validator,
+        }
+
+        # Run retrieval + grading stages synchronously via graph
+        # then stream the generation for UX responsiveness.
+        graph = build_corrective_rag_graph()
+        final_state = graph.invoke(initial_state)
+
+        answer = final_state.get("answer", REFUSAL_MESSAGE)
+        raw_citations = final_state.get("citations", [])
+        citations = [
+            Citation(
+                index=c["index"],
+                document=c.get("document"),
+                document_id=c.get("document_id", 0),
+                page_number=c.get("page_number"),
+                section=c.get("section"),
+                text=c.get("text", ""),
+                similarity_score=c.get("similarity_score", 0.0),
+            )
+            for c in raw_citations
+        ]
+        insufficient = final_state.get("insufficient_information", False)
+
+        # Stream answer word-by-word for a responsive feel
+        words = answer.split(" ")
+        for i, word in enumerate(words):
+            token = word if i == 0 else " " + word
+            yield f"data: {json.dumps({'token': token})}\n\n"
+
+        yield self._done_event(answer, citations, insufficient=insufficient)
+
+    # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
+
+    def _retrieve_context(
+        self,
+        question: str,
+        owner_id: int | None,
+        document_ids: list[int] | None,
+        top_k: int | None,
+        org_id: int | None,
+    ) -> tuple[str, list[SearchResult], bool, str]:
+        """Run the shared pre-generation retrieval stages for both request modes."""
+        processed_query = preprocess_query(question)
+        candidate_chunks = self.indexing.search(
+            query=processed_query,
+            top_k=self._candidate_top_k(top_k),
+            owner_id=owner_id,
+            document_ids=document_ids,
+            org_id=org_id,
+        )
+        if not candidate_chunks and self._vector_store_is_empty():
+            self._ensure_documents_indexed()
+            candidate_chunks = self.indexing.search(
+                query=processed_query,
+                top_k=self._candidate_top_k(top_k),
+                owner_id=owner_id,
+                document_ids=document_ids,
+                org_id=org_id,
+            )
+
+        chunks = self.reranker.rerank(
+            query=processed_query,
+            chunks=candidate_chunks,
+            top_k=settings.rerank_top_k,
+        )
+        chunks = self.context_validator.usable_chunks(chunks)
+        context_is_enough, context = self.context_validator.validate_context(processed_query, chunks)
+        return processed_query, chunks, context_is_enough, context
+
+    def _vector_store_is_empty(self) -> bool:
+        try:
+            return self.indexing.vector_store.count() == 0
+        except Exception:
+            return False
+
+    def _ensure_documents_indexed(self) -> None:
+        """If vector store is empty, sync extracted text from DB into vector store."""
+        try:
+            from app.database.session import SessionLocal
+            from app.models.user import Document, DocumentStatus
+            from app.services.document_processor import get_document_processor
+            from app.services.storage import get_storage_backend
+
+            processor = get_document_processor()
+            storage = get_storage_backend()
+
+            with SessionLocal() as db:
+                indexed_docs = (
+                    db.query(Document)
+                    .filter(
+                        Document.status == DocumentStatus.INDEXED,
+                        Document.extracted_text_path.isnot(None),
+                    )
+                    .all()
+                )
+                for doc in indexed_docs:
+                    if doc.extracted_text_path:
+                        try:
+                            result = processor.load_extraction_result(storage, doc.extracted_text_path)
+                            self.indexing.index_document(
+                                result=result,
+                                document_id=doc.id,
+                                filename=doc.filename,
+                                owner_id=doc.owner_id,
+                                org_id=doc.org_id,
+                            )
+                        except Exception as e:
+                            logger.warning("Auto re-indexing document %d failed: %s", doc.id, e)
+        except Exception as exc:
+            logger.warning("Auto re-indexing check failed: %s", exc)
+
+    @staticmethod
+    def _candidate_top_k(requested_top_k: int | None) -> int:
+        """Keep the public top_k override while retaining the 10-20 candidate pool."""
+        if requested_top_k is None:
+            return settings.vector_search_top_k
+        return max(10, min(20, requested_top_k))
+
+    def _insufficient_result(self, chunks: list[SearchResult]) -> RAGResult:
+        return RAGResult(
+            answer=REFUSAL_MESSAGE,
+            retrieved_chunks=[chunk.to_dict() for chunk in chunks],
+            provider=self.llm.provider_name,
+            model=self.llm.model_name,
+            insufficient_information=True,
+        )
+
+    def _done_event(
+        self, answer: str, citations: list[Citation], insufficient: bool
+    ) -> str:
+        done_payload = {
+            "answer": answer,
+            "citations": [citation.to_dict() for citation in citations],
+            "provider": self.llm.provider_name,
+            "model": self.llm.model_name,
+            "insufficient_information": insufficient,
+        }
+        return f"data: [DONE] {json.dumps(done_payload)}\n\n"
 
     def _build_citations(self, chunks: list[SearchResult]) -> list[Citation]:
         citations: list[Citation] = []
@@ -125,22 +331,6 @@ class RAGService:
                 )
             )
         return citations
-
-    def _format_context(self, chunks: list[SearchResult]) -> str:
-        if not chunks:
-            return "(no relevant context found)"
-
-        blocks: list[str] = []
-        for i, chunk in enumerate(chunks, start=1):
-            location_parts = []
-            if chunk.page_number is not None:
-                location_parts.append(f"Page {chunk.page_number}")
-            if chunk.section:
-                location_parts.append(f"Section {chunk.section}")
-            location = ", ".join(location_parts) if location_parts else "Unknown location"
-            header = f"[{i}] {chunk.filename or 'document'} ({location})"
-            blocks.append(f"{header}\n{chunk.text}")
-        return "\n\n".join(blocks)
 
     def _build_user_prompt(
         self,
@@ -171,19 +361,6 @@ class RAGService:
             f"Question:\n{question}"
             f"{compare_instruction}"
         )
-
-    @staticmethod
-    def _is_insufficient(answer: str, chunks: list[SearchResult]) -> bool:
-        if not chunks:
-            return True
-        normalized = answer.lower().strip()
-        markers = [
-            "i don't have enough information",
-            "i do not have enough information",
-            "don't have enough information",
-            "no relevant information",
-        ]
-        return any(marker in normalized for marker in markers)
 
     @staticmethod
     def _maybe_format_comparison(answer: str, chunks: list[SearchResult]) -> str:

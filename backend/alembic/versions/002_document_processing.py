@@ -17,8 +17,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Add 'extracted' to document_status enum
-    op.execute("ALTER TYPE document_status ADD VALUE IF NOT EXISTS 'extracted'")
+    bind = op.get_bind()
+    is_postgres = bind.dialect.name == "postgresql"
+    if is_postgres:
+        op.execute("ALTER TYPE document_status ADD VALUE IF NOT EXISTS 'extracted'")
 
     op.add_column("documents", sa.Column("file_size", sa.Integer(), nullable=False, server_default="0"))
     op.add_column("documents", sa.Column("page_count", sa.Integer(), nullable=True))
@@ -29,11 +31,12 @@ def upgrade() -> None:
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.func.now(),
             nullable=False,
         ),
     )
-    op.alter_column("documents", "file_size", server_default=None)
+    if is_postgres:
+        op.alter_column("documents", "file_size", server_default=None)
 
 
 def downgrade() -> None:
@@ -42,3 +45,4 @@ def downgrade() -> None:
     op.drop_column("documents", "extracted_text_path")
     op.drop_column("documents", "page_count")
     op.drop_column("documents", "file_size")
+

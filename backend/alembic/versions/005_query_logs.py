@@ -17,6 +17,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    is_postgres = bind.dialect.name == "postgresql"
+
     op.create_table(
         "query_logs",
         sa.Column("id", sa.Integer(), nullable=False),
@@ -28,7 +31,7 @@ def upgrade() -> None:
         sa.Column("provider", sa.String(length=50), nullable=True),
         sa.Column("citation_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("insufficient_information", sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.ForeignKeyConstraint(["conversation_id"], ["conversations.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["message_id"], ["messages.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
@@ -39,8 +42,9 @@ def upgrade() -> None:
     op.create_index(op.f("ix_query_logs_conversation_id"), "query_logs", ["conversation_id"], unique=False)
     op.create_index(op.f("ix_query_logs_message_id"), "query_logs", ["message_id"], unique=False)
     op.create_index(op.f("ix_query_logs_topic"), "query_logs", ["topic"], unique=False)
-    op.alter_column("query_logs", "citation_count", server_default=None)
-    op.alter_column("query_logs", "insufficient_information", server_default=None)
+    if is_postgres:
+        op.alter_column("query_logs", "citation_count", server_default=None)
+        op.alter_column("query_logs", "insufficient_information", server_default=None)
 
 
 def downgrade() -> None:
@@ -50,3 +54,4 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_query_logs_user_id"), table_name="query_logs")
     op.drop_index(op.f("ix_query_logs_id"), table_name="query_logs")
     op.drop_table("query_logs")
+

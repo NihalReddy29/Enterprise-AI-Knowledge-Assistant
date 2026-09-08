@@ -28,6 +28,14 @@ api.interceptors.response.use(
   },
 )
 
+export function getApiBaseUrl(): string {
+  return API_BASE
+}
+
+export function getAuthToken(): string | null {
+  return useAuthStore.getState().token
+}
+
 export function getErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
     const detail = error.response?.data?.detail

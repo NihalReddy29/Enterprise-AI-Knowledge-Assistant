@@ -7,6 +7,7 @@ import { ChatPage } from './pages/Chat'
 import { DashboardPage } from './pages/Dashboard'
 import { DocumentsPage } from './pages/Documents'
 import { LoginPage } from './pages/Login'
+import { OrganizationsPage } from './pages/Organizations'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -28,6 +29,7 @@ export default function App() {
               <Route index element={<DashboardPage />} />
               <Route path="chat" element={<ChatPage />} />
               <Route path="documents" element={<DocumentsPage />} />
+              <Route path="organizations" element={<OrganizationsPage />} />
               <Route path="admin" element={<AdminPage />} />
             </Route>
           </Route>

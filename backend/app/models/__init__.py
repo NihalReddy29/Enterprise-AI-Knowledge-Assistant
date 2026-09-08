@@ -7,6 +7,10 @@ from app.models.user import (
     Feedback,
     Message,
     MessageRole,
+    OrgInvite,
+    OrgMember,
+    OrgRole,
+    Organization,
     QueryLog,
     User,
     UserRole,
@@ -15,6 +19,10 @@ from app.models.user import (
 __all__ = [
     "User",
     "UserRole",
+    "Organization",
+    "OrgMember",
+    "OrgInvite",
+    "OrgRole",
     "Document",
     "DocumentStatus",
     "Conversation",
@@ -23,3 +31,4 @@ __all__ = [
     "Feedback",
     "QueryLog",
 ]
+

@@ -17,6 +17,14 @@ class UserRole(str, enum.Enum):
     EMPLOYEE = "employee"
 
 
+class OrgRole(str, enum.Enum):
+    """Organization member role."""
+
+    OWNER = "owner"
+    ADMIN = "admin"
+    MEMBER = "member"
+
+
 class DocumentStatus(str, enum.Enum):
     """Document processing status."""
 
@@ -65,6 +73,105 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    org_memberships: Mapped[list["OrgMember"]] = relationship(
+        "OrgMember",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+
+class Organization(Base):
+    """A team or company that can have shared document libraries."""
+
+    __tablename__ = "organizations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    slug: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    created_by: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    members: Mapped[list["OrgMember"]] = relationship(
+        "OrgMember",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
+    invites: Mapped[list["OrgInvite"]] = relationship(
+        "OrgInvite",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
+    documents: Mapped[list["Document"]] = relationship(
+        "Document",
+        back_populates="organization",
+    )
+
+
+class OrgMember(Base):
+    """Membership linking a user to an organization."""
+
+    __tablename__ = "org_members"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    org_id: Mapped[int] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    role: Mapped[OrgRole] = mapped_column(
+        Enum(OrgRole, name="org_role", values_callable=lambda x: [e.value for e in x]),
+        default=OrgRole.MEMBER,
+        nullable=False,
+    )
+    joined_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    organization: Mapped["Organization"] = relationship("Organization", back_populates="members")
+    user: Mapped["User"] = relationship("User", back_populates="org_memberships")
+
+
+class OrgInvite(Base):
+    """Pending email invite to an organization."""
+
+    __tablename__ = "org_invites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    org_id: Mapped[int] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    role: Mapped[OrgRole] = mapped_column(
+        Enum(OrgRole, name="org_role", values_callable=lambda x: [e.value for e in x]),
+        default=OrgRole.MEMBER,
+        nullable=False,
+    )
+    invited_by: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    organization: Mapped["Organization"] = relationship("Organization", back_populates="invites")
 
 
 class Document(Base):
@@ -76,6 +183,9 @@ class Document(Base):
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     file_type: Mapped[str] = mapped_column(String(50), nullable=False)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    org_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -100,6 +210,9 @@ class Document(Base):
     )
 
     owner: Mapped["User"] = relationship("User", back_populates="documents")
+    organization: Mapped["Organization | None"] = relationship(
+        "Organization", back_populates="documents"
+    )
 
 
 class Conversation(Base):

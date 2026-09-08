@@ -10,7 +10,10 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from app.config import get_settings
-from app.routers import admin, auth, chat, documents, search
+from app.routers import admin, auth, chat, documents, orgs, search
+from app.database.base import Base
+from app.database.session import engine
+import app.models  # load all models
 
 settings = get_settings()
 limiter = Limiter(key_func=get_remote_address, default_limits=[f"{settings.rate_limit_per_minute}/minute"])
@@ -19,6 +22,7 @@ limiter = Limiter(key_func=get_remote_address, default_limits=[f"{settings.rate_
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
+    Base.metadata.create_all(bind=engine)
     yield
 
 
@@ -52,6 +56,7 @@ app.include_router(documents.router, prefix=api_prefix)
 app.include_router(search.router, prefix=api_prefix)
 app.include_router(chat.router, prefix=api_prefix)
 app.include_router(admin.router, prefix=api_prefix)
+app.include_router(orgs.router, prefix=api_prefix)
 
 
 @app.get("/", tags=["Health"])

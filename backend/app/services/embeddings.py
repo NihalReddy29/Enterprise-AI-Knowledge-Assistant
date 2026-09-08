@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import time
 from abc import ABC, abstractmethod
-from typing import Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Sequence
 
 from app.config import get_settings
 
@@ -141,27 +143,52 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
     def provider_name(self) -> str:
         return "gemini"
 
+    def _embed_with_retry(self, content: Any, task_type: str) -> Any:
+        max_retries = 6
+        backoff = 4.0
+        for attempt in range(max_retries):
+            try:
+                return self._genai.embed_content(
+                    model=self.model,
+                    content=content,
+                    task_type=task_type,
+                    output_dimensionality=settings.embedding_dimension,
+                )
+            except Exception as e:
+                err_str = str(e).lower()
+                if "429" in err_str or "resource_exhausted" in err_str or "quota" in err_str:
+                    logger.warning(
+                        "Gemini embedding rate limit hit (attempt %d/%d). Waiting %.1fs...",
+                        attempt + 1,
+                        max_retries,
+                        backoff,
+                    )
+                    time.sleep(backoff)
+                    backoff *= 1.5
+                else:
+                    raise
+        raise RuntimeError("Exceeded maximum retries for Gemini embeddings")
+
     def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
+        if not texts:
+            return []
         vectors: list[list[float]] = []
-        for text in texts:
-            result = self._genai.embed_content(
-                model=self.model,
-                content=text,
-                task_type="retrieval_document",
-                output_dimensionality=settings.embedding_dimension,
-            )
-            vector = result["embedding"]
-            vectors.append(vector)
-            self._dimension = len(vector)
+        batch_size = 50
+        text_list = list(texts)
+        for i in range(0, len(text_list), batch_size):
+            batch = text_list[i : i + batch_size]
+            result = self._embed_with_retry(batch, "retrieval_document")
+            emb = result["embedding"]
+            if emb and isinstance(emb[0], list):
+                vectors.extend(emb)
+                self._dimension = len(emb[0])
+            else:
+                vectors.append(emb)
+                self._dimension = len(emb)
         return vectors
 
     def embed_query(self, text: str) -> list[float]:
-        result = self._genai.embed_content(
-            model=self.model,
-            content=text,
-            task_type="retrieval_query",
-            output_dimensionality=settings.embedding_dimension,
-        )
+        result = self._embed_with_retry(text, "retrieval_query")
         vector = result["embedding"]
         self._dimension = len(vector)
         return vector
@@ -238,9 +265,21 @@ def create_embedding_provider(provider_name: str | None = None) -> EmbeddingProv
     )
 
 
+_EMBEDDING_SERVICE_SINGLETON: EmbeddingService | None = None
+
+
 def get_embedding_service() -> EmbeddingService:
-    """Return configured embedding service."""
-    return EmbeddingService()
+    """Return a cached embedding service (provider loaded once per process)."""
+    global _EMBEDDING_SERVICE_SINGLETON
+    if _EMBEDDING_SERVICE_SINGLETON is None:
+        _EMBEDDING_SERVICE_SINGLETON = EmbeddingService()
+    return _EMBEDDING_SERVICE_SINGLETON
+
+
+def reset_embedding_service() -> None:
+    """Clear singleton (used in tests)."""
+    global _EMBEDDING_SERVICE_SINGLETON
+    _EMBEDDING_SERVICE_SINGLETON = None
 
 
 def _l2_normalize(values: list[float]) -> list[float]:

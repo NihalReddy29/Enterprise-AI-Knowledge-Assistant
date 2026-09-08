@@ -1,8 +1,37 @@
 # Enterprise AI Knowledge Assistant
 
-SaaS-style RAG knowledge assistant with FastAPI backend and React frontend.
+SaaS-style **Retrieval-Augmented Generation (RAG)** knowledge assistant with a FastAPI backend and React frontend, for grounded, citation-backed document question-answering across large, heterogeneous document corpora.
 
-## Quick start (Docker)
+[GitHub Repo](https://github.com/NihalReddy29/Enterprise-AI-Knowledge-Assistant)
+
+---
+
+## Overview
+
+The Enterprise AI Knowledge Assistant lets users ask natural-language questions over an indexed document corpus and get answers grounded in source material, with per-source citations (document, page, similarity score) for transparency and auditability.
+
+The project is undergoing a pipeline redesign to move from a baseline RAG setup to a more robust, agentic architecture built on **LangChain** and **LangGraph**, targeting:
+
+- A corpus of **thousands of documents**
+- **Tens of concurrent users**
+- Multi-step reasoning and orchestration over retrieved context, rather than single-shot retrieval + generation
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Backend API | FastAPI |
+| Frontend | React (Vite) |
+| Metadata storage | PostgreSQL |
+| Vector storage / retrieval | Qdrant |
+| Orchestration / agentic reasoning | LangChain, LangGraph |
+| Deployment | Docker, AWS (S3, RDS, ECS, CloudWatch), Terraform |
+
+---
+
+## Quick Start (Docker)
 
 ```bash
 # From repo root
@@ -29,7 +58,9 @@ docker compose down
 docker compose down -v   # also remove volumes
 ```
 
-## Local development
+---
+
+## Local Development
 
 ### Backend
 
@@ -53,17 +84,41 @@ npm run dev
 
 Frontend: http://localhost:5173 (proxies `/api` → backend)
 
-## Project layout
+---
 
-```
-enterprise-ai-assistant/
-├── backend/          # FastAPI + RAG pipeline
-├── frontend/         # React + Vite UI
+## Project Layout
+
+ enterprise-ai-assistant/
+├── backend/ # FastAPI + RAG pipeline
+├── frontend/ # React + Vite UI
 ├── docker-compose.yml
 └── .env.example
-```
 
-## Phases completed
+
+---
+
+## Architecture
+
+1. **Document Processing** — Ingested documents (PDF, PPTX, etc.) are parsed and chunked.
+2. **Embeddings** — Chunks are embedded and stored in Qdrant for vector-based semantic retrieval, with metadata (source, page number) tracked in PostgreSQL.
+3. **Retrieval** — User queries are embedded and matched against the vector store to retrieve the most relevant chunks.
+4. **Agentic Orchestration (LangGraph)** — Retrieved context is passed through a LangGraph-based flow supporting multi-step reasoning and synthesis across multiple sources, rather than relying on a single top-ranked chunk.
+5. **Response Generation** — An LLM generates a grounded answer with citations back to the specific document, page, and retrieval score.
+
+---
+
+## Known Issues & Ongoing Improvements
+
+Current retrieval sometimes over-weights high-level "outline" or agenda-style content (e.g., a slide listing every topic in a module) over the detailed source material that actually answers a question, since outline content can score deceptively well on plain embedding similarity. The pipeline redesign is addressing this via:
+
+- **Hybrid retrieval** (BM25 + embeddings) to complement pure semantic search
+- **Cross-encoder reranking** of top-k retrieved chunks before generation
+- **Improved chunking strategy** to avoid dense, keyword-heavy outline chunks dominating retrieval
+- **Multi-source synthesis** in the generation step, rather than defaulting to the single top-scored chunk
+
+---
+
+## Phases Completed
 
 1. Auth + database
 2. Document upload / OCR
@@ -75,7 +130,19 @@ enterprise-ai-assistant/
 8. Docker deployment
 9. AWS deployment (S3, RDS, ECS, CloudWatch)
 
-## AWS deployment
+---
+
+## Roadmap
+
+- [ ] Integrate hybrid (BM25 + vector) retrieval
+- [ ] Add cross-encoder reranking step
+- [ ] Rebuild orchestration layer with LangGraph for agentic, multi-step Q&A
+- [ ] Improve chunking granularity for slide/outline-heavy documents
+- [ ] Load testing for concurrent multi-user query support
+
+---
+
+## AWS Deployment
 
 See [aws/README.md](aws/README.md) for Terraform + ECR/ECS deploy steps.
 
@@ -85,3 +152,9 @@ cp terraform.tfvars.example terraform.tfvars
 terraform init && terraform apply
 # then push images with aws/scripts/push-images.ps1
 ```
+
+---
+
+## License
+
+*(Add license information here.)*

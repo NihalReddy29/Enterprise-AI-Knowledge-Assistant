@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Generator
 
 from app.config import get_settings
 
@@ -28,6 +30,12 @@ class LLMProvider(ABC):
     @abstractmethod
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResponse:
         """Generate a completion from system + user prompts."""
+
+    @abstractmethod
+    def generate_stream(
+        self, system_prompt: str, user_prompt: str
+    ) -> Generator[str, None, None]:
+        """Yield response tokens one by one."""
 
     @property
     @abstractmethod
@@ -53,7 +61,7 @@ class FakeLLMProvider(LLMProvider):
 
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResponse:
         context = _extract_section(user_prompt, "Context:")
-        question = _extract_section(user_prompt, "Question:")
+        question = _extract_section(user_prompt, "Question:")  # noqa: F841
 
         if not context.strip() or context.strip().lower() in ("(no relevant context found)", ""):
             answer = "I don't have enough information."
@@ -72,6 +80,16 @@ class FakeLLMProvider(LLMProvider):
             provider=self.provider_name,
             model=self.model_name,
         )
+
+    def generate_stream(
+        self, system_prompt: str, user_prompt: str
+    ) -> Generator[str, None, None]:
+        """Yield the fake answer word-by-word to simulate streaming."""
+        response = self.generate(system_prompt, user_prompt)
+        words = response.content.split(" ")
+        for i, word in enumerate(words):
+            yield word if i == 0 else " " + word
+            time.sleep(0.03)
 
 
 class OpenAILLMProvider(LLMProvider):
@@ -122,6 +140,24 @@ class OpenAILLMProvider(LLMProvider):
             usage=usage,
         )
 
+    def generate_stream(
+        self, system_prompt: str, user_prompt: str
+    ) -> Generator[str, None, None]:
+        stream = self.client.chat.completions.create(
+            model=self.model,
+            temperature=settings.llm_temperature,
+            max_tokens=settings.llm_max_tokens,
+            stream=True,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                yield delta.content
+
 
 class GeminiLLMProvider(LLMProvider):
     """Google Gemini chat completions."""
@@ -166,6 +202,33 @@ class GeminiLLMProvider(LLMProvider):
             provider=self.provider_name,
             model=self.model,
         )
+
+    def generate_stream(
+        self, system_prompt: str, user_prompt: str
+    ) -> Generator[str, None, None]:
+        model = self._genai.GenerativeModel(
+            model_name=self.model,
+            system_instruction=system_prompt,
+        )
+        response = model.generate_content(
+            user_prompt,
+            generation_config={
+                "temperature": settings.llm_temperature,
+                "max_output_tokens": settings.llm_max_tokens,
+            },
+            stream=True,
+        )
+        for chunk in response:
+            text = ""
+            try:
+                text = chunk.text or ""
+            except Exception:
+                if hasattr(chunk, "candidates") and chunk.candidates:
+                    candidate = chunk.candidates[0]
+                    if hasattr(candidate, "content") and hasattr(candidate.content, "parts"):
+                        text = "".join(getattr(p, "text", "") for p in candidate.content.parts if hasattr(p, "text"))
+            if text:
+                yield text
 
 
 class ClaudeLLMProvider(LLMProvider):
@@ -212,6 +275,18 @@ class ClaudeLLMProvider(LLMProvider):
             usage=usage,
         )
 
+    def generate_stream(
+        self, system_prompt: str, user_prompt: str
+    ) -> Generator[str, None, None]:
+        with self.client.messages.stream(
+            model=self.model,
+            max_tokens=settings.llm_max_tokens,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        ) as stream:
+            for text in stream.text_stream:
+                yield text
+
 
 class LLMService:
     """High-level LLM service used by the RAG pipeline."""
@@ -229,6 +304,11 @@ class LLMService:
 
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResponse:
         return self.provider.generate(system_prompt, user_prompt)
+
+    def generate_stream(
+        self, system_prompt: str, user_prompt: str
+    ) -> Generator[str, None, None]:
+        return self.provider.generate_stream(system_prompt, user_prompt)
 
 
 def create_llm_provider(provider_name: str | None = None) -> LLMProvider:

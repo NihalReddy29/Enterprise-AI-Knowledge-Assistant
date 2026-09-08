@@ -42,6 +42,7 @@ class IndexingService:
         document_id: int,
         filename: str,
         owner_id: int,
+        org_id: int | None = None,
     ) -> IndexingResult:
         """Chunk, embed, and upsert document vectors."""
         chunks = self.chunking.chunk_extraction(
@@ -63,15 +64,22 @@ class IndexingService:
             raise RuntimeError("Embedding count mismatch")
 
         ids = [self._chunk_id(chunk) for chunk in chunks]
-        payloads = [chunk.to_metadata() for chunk in chunks]
+        payloads = []
+        for chunk in chunks:
+            meta = chunk.to_metadata()
+            if org_id is not None:
+                meta["org_id"] = org_id
+            payloads.append(meta)
+
         self.vector_store.upsert(ids=ids, vectors=vectors, payloads=payloads)
 
         logger.info(
-            "Indexed document %d: %d chunks via %s → %s",
+            "Indexed document %d: %d chunks via %s → %s (org_id=%s)",
             document_id,
             len(chunks),
             self.embeddings.provider_name,
             type(self.vector_store).__name__,
+            org_id,
         )
 
         return IndexingResult(
@@ -87,6 +95,7 @@ class IndexingService:
         top_k: int = 5,
         owner_id: int | None = None,
         document_ids: list[int] | None = None,
+        org_id: int | None = None,
     ) -> list[SearchResult]:
         """Embed query and retrieve similar chunks."""
         query_vector = self.embeddings.embed_query(query)
@@ -95,6 +104,8 @@ class IndexingService:
             filters["owner_id"] = owner_id
         if document_ids:
             filters["document_ids"] = document_ids
+        if org_id is not None:
+            filters["org_id"] = org_id
 
         return self.vector_store.search(
             query_vector=query_vector,

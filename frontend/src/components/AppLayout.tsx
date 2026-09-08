@@ -5,6 +5,7 @@ const links = [
   { to: '/', label: 'Dashboard' },
   { to: '/chat', label: 'Chat' },
   { to: '/documents', label: 'Documents' },
+  { to: '/organizations', label: 'Teams' },
 ]
 
 export function AppLayout() {

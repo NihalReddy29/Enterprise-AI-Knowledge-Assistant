@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { MarkdownAnswer } from './MarkdownAnswer'
 import { submitFeedback } from '../api/chat'
 import { getErrorMessage } from '../api/client'
 import type { ChatMessage, Citation } from '../types'
@@ -30,13 +31,16 @@ export function MessageBubble({ message, onCitationClick }: MessageBubbleProps) 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div
-        className={`max-w-[min(720px,92%)] rounded-2xl px-4 py-3 ${
-          isUser
+        className={`max-w-[min(720px,92%)] rounded-2xl px-4 py-3 ${isUser
             ? 'bg-accent text-white'
             : 'border border-line bg-panel text-ink shadow-[0_10px_30px_rgba(16,35,31,0.04)]'
-        }`}
+          }`}
       >
-        <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
+        {isUser ? (
+          <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
+        ) : (
+          <MarkdownAnswer content={message.content} />
+        )}
         {!isUser && message.citations?.length ? (
           <CitationList citations={message.citations} onSelect={onCitationClick} />
         ) : null}
@@ -47,11 +51,10 @@ export function MessageBubble({ message, onCitationClick }: MessageBubbleProps) 
               type="button"
               disabled={pending || feedback !== null}
               onClick={() => void sendFeedback(1)}
-              className={`rounded-md px-2 py-1 text-xs ${
-                feedback === 'helpful'
+              className={`rounded-md px-2 py-1 text-xs ${feedback === 'helpful'
                   ? 'bg-accent-soft text-accent'
                   : 'border border-line hover:border-accent'
-              }`}
+                }`}
             >
               Helpful
             </button>
@@ -59,11 +62,10 @@ export function MessageBubble({ message, onCitationClick }: MessageBubbleProps) 
               type="button"
               disabled={pending || feedback !== null}
               onClick={() => void sendFeedback(0)}
-              className={`rounded-md px-2 py-1 text-xs ${
-                feedback === 'not_helpful'
+              className={`rounded-md px-2 py-1 text-xs ${feedback === 'not_helpful'
                   ? 'bg-red-50 text-danger'
                   : 'border border-line hover:border-danger'
-              }`}
+                }`}
             >
               Not helpful
             </button>

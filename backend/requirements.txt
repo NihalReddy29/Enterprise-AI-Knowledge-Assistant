@@ -35,6 +35,12 @@ boto3==1.42.49
 openai==2.21.0
 qdrant-client==1.17.0
 pinecone==7.3.0
+sentence-transformers
+
+# LangChain & LangGraph Orchestration
+langchain>=0.3.0
+langchain-community>=0.3.0
+langgraph>=0.2.0
 
 # LLM providers (Phase 4)
 anthropic==0.79.0

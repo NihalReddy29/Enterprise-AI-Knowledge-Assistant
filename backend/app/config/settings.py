@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import List
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -95,8 +95,14 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.1
     llm_max_tokens: int = 1024
     rag_top_k: int = 5
+    # RAG retrieval pipeline: retrieve a wider candidate pool, then rerank it.
+    vector_search_top_k: int = Field(default=15, ge=10, le=20)
+    rerank_top_k: int = Field(default=5, ge=3, le=5)
+    context_min_score: float = Field(default=0.05, ge=0.0, le=1.0)
+    context_min_grounding_ratio: float = 0.35
     rag_history_turns: int = 6
     rag_min_similarity: float = 0.0
+
 
     @field_validator("cors_origins", mode="before")
     @classmethod
