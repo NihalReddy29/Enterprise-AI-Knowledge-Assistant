@@ -27,6 +27,7 @@ The project is undergoing a pipeline redesign to move from a baseline RAG setup 
 | Metadata storage | PostgreSQL |
 | Vector storage / retrieval | Qdrant |
 | Orchestration / agentic reasoning | LangChain, LangGraph |
+| LLM | Google Gemini(Claude Opus, OpenAI GPT and more also works) |
 | Deployment | Docker, AWS (S3, RDS, ECS, CloudWatch), Terraform |
 
 ---
