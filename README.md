@@ -88,12 +88,36 @@ Frontend: http://localhost:5173 (proxies `/api` → backend)
 
 ## Project Layout
 
- enterprise-ai-assistant/
-├── backend/ # FastAPI + RAG pipeline
-├── frontend/ # React + Vite UI
+enterprise-ai-assistant/
+├── backend/                          # FastAPI + RAG pipeline
+│   ├── alembic/versions/             # DB migrations
+│   ├── app/
+│   │   ├── config/                   # Settings
+│   │   ├── models/                   # DB models (user, org, etc.)
+│   │   ├── routers/                  # API routes (chat, documents, orgs)
+│   │   ├── schemas/                  # Pydantic schemas
+│   │   ├── services/
+│   │   │   ├── chunking.py
+│   │   │   ├── embeddings.py
+│   │   │   ├── indexing.py
+│   │   │   ├── llm.py
+│   │   │   ├── rag.py
+│   │   │   ├── vector_store.py
+│   │   │   ├── reranker.py           # Cross-encoder reranking
+│   │   │   ├── query_processor.py
+│   │   │   ├── context_validator.py
+│   │   │   └── langgraph_orchestrator/  # Agentic multi-step orchestration
+│   │   └── workers/                  # Background document processing
+│   ├── tests/
+│   └── requirements.txt
+├── frontend/                         # React + Vite UI
+│   └── src/
+│       ├── api/                      # chat.ts, client.ts, orgs.ts
+│       ├── components/               # AppLayout, MessageBubble, MarkdownAnswer
+│       ├── hooks/                    # useOrgs
+│       └── pages/                    # Chat, Documents, Organizations
 ├── docker-compose.yml
 └── .env.example
-
 
 ---
 
@@ -155,6 +179,3 @@ terraform init && terraform apply
 
 ---
 
-## License
-
-*(Add license information here.)*
