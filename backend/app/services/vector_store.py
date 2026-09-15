@@ -44,7 +44,7 @@ class VectorStore(ABC):
     """Interface for vector similarity search backends."""
 
     @abstractmethod
-    def ensure_collection(self, dimension: int) -> None:
+    def ensure_collection(self, dimension: int, collection_name: str | None = None) -> None:
         """Create collection/index if it does not exist."""
 
     @abstractmethod
@@ -53,6 +53,7 @@ class VectorStore(ABC):
         ids: list[str],
         vectors: list[list[float]],
         payloads: list[dict[str, Any]],
+        collection_name: str | None = None,
     ) -> None:
         """Insert or update vectors with metadata payloads."""
 
@@ -62,47 +63,68 @@ class VectorStore(ABC):
         query_vector: list[float],
         top_k: int = 5,
         filters: dict[str, Any] | None = None,
+        collection_name: str | None = None,
     ) -> list[SearchResult]:
         """Return top-K similar chunks."""
 
     @abstractmethod
-    def delete_by_document(self, document_id: int) -> None:
+    def delete_by_document(
+        self, document_id: int, collection_name: str | None = None
+    ) -> None:
         """Remove all vectors for a document."""
 
     @abstractmethod
-    def count(self) -> int:
+    def count(self, collection_name: str | None = None) -> int:
         """Return approximate vector count."""
+
+    def delete_collection(self, collection_name: str) -> None:
+        """Remove an entire collection (optional; not all backends support this)."""
+        raise NotImplementedError(f"{type(self).__name__} does not support delete_collection")
 
 
 class InMemoryVectorStore(VectorStore):
     """In-process vector store for tests and local development without Qdrant."""
 
     def __init__(self) -> None:
-        self._records: list[dict[str, Any]] = []
+        self._collections: dict[str, list[dict[str, Any]]] = {}
         self._dimension: int | None = None
+        self._default_collection = settings.qdrant_collection
 
-    def ensure_collection(self, dimension: int) -> None:
+    def _records_for(self, collection_name: str | None) -> list[dict[str, Any]]:
+        name = collection_name or self._default_collection
+        if name not in self._collections:
+            self._collections[name] = []
+        return self._collections[name]
+
+    def ensure_collection(self, dimension: int, collection_name: str | None = None) -> None:
         self._dimension = dimension
+        self._records_for(collection_name)
 
     def upsert(
         self,
         ids: list[str],
         vectors: list[list[float]],
         payloads: list[dict[str, Any]],
+        collection_name: str | None = None,
     ) -> None:
+        records = self._records_for(collection_name)
         id_set = set(ids)
-        self._records = [r for r in self._records if r["id"] not in id_set]
+        self._collections[collection_name or self._default_collection] = [
+            r for r in records if r["id"] not in id_set
+        ]
+        records = self._records_for(collection_name)
         for point_id, vector, payload in zip(ids, vectors, payloads):
-            self._records.append({"id": point_id, "vector": vector, "payload": payload})
+            records.append({"id": point_id, "vector": vector, "payload": payload})
 
     def search(
         self,
         query_vector: list[float],
         top_k: int = 5,
         filters: dict[str, Any] | None = None,
+        collection_name: str | None = None,
     ) -> list[SearchResult]:
         scored: list[tuple[float, dict[str, Any]]] = []
-        for record in self._records:
+        for record in self._records_for(collection_name):
             payload = record["payload"]
             if filters:
                 if "document_id" in filters and payload.get("document_id") != filters["document_id"]:
@@ -112,6 +134,8 @@ class InMemoryVectorStore(VectorStore):
                 if "document_ids" in filters and payload.get("document_id") not in filters["document_ids"]:
                     continue
                 if "org_id" in filters and payload.get("org_id") != filters["org_id"]:
+                    continue
+                if "team_id" in filters and payload.get("team_id") != filters["team_id"]:
                     continue
             score = _cosine_similarity(query_vector, record["vector"])
             scored.append((score, payload))
@@ -133,13 +157,19 @@ class InMemoryVectorStore(VectorStore):
             )
         return results
 
-    def delete_by_document(self, document_id: int) -> None:
-        self._records = [
-            r for r in self._records if r["payload"].get("document_id") != document_id
-        ]
+    def delete_by_document(self, document_id: int, collection_name: str | None = None) -> None:
+        name = collection_name or self._default_collection
+        if name in self._collections:
+            self._collections[name] = [
+                r for r in self._collections[name]
+                if r["payload"].get("document_id") != document_id
+            ]
 
-    def count(self) -> int:
-        return len(self._records)
+    def count(self, collection_name: str | None = None) -> int:
+        return len(self._records_for(collection_name))
+
+    def delete_collection(self, collection_name: str) -> None:
+        self._collections.pop(collection_name, None)
 
 
 class QdrantVectorStore(VectorStore):
@@ -206,7 +236,9 @@ class QdrantVectorStore(VectorStore):
         ids: list[str],
         vectors: list[list[float]],
         payloads: list[dict[str, Any]],
+        collection_name: str | None = None,
     ) -> None:
+        target = collection_name or self.collection
         points = [
             self._models.PointStruct(
                 id=self._to_point_id(point_id),
@@ -215,17 +247,19 @@ class QdrantVectorStore(VectorStore):
             )
             for point_id, vector, payload in zip(ids, vectors, payloads)
         ]
-        self.client.upsert(collection_name=self.collection, points=points)
+        self.client.upsert(collection_name=target, points=points)
 
     def search(
         self,
         query_vector: list[float],
         top_k: int = 5,
         filters: dict[str, Any] | None = None,
+        collection_name: str | None = None,
     ) -> list[SearchResult]:
+        target = collection_name or self.collection
         query_filter = self._build_filter(filters)
         hits = self.client.search(
-            collection_name=self.collection,
+            collection_name=target,
             query_vector=query_vector,
             limit=top_k,
             query_filter=query_filter,
@@ -248,9 +282,10 @@ class QdrantVectorStore(VectorStore):
             )
         return results
 
-    def delete_by_document(self, document_id: int) -> None:
+    def delete_by_document(self, document_id: int, collection_name: str | None = None) -> None:
+        target = collection_name or self.collection
         self.client.delete(
-            collection_name=self.collection,
+            collection_name=target,
             points_selector=self._models.FilterSelector(
                 filter=self._models.Filter(
                     must=[
@@ -263,9 +298,15 @@ class QdrantVectorStore(VectorStore):
             ),
         )
 
-    def count(self) -> int:
-        info = self.client.get_collection(self.collection)
+    def count(self, collection_name: str | None = None) -> int:
+        target = collection_name or self.collection
+        info = self.client.get_collection(target)
         return int(info.points_count or 0)
+
+    def delete_collection(self, collection_name: str) -> None:
+        existing = {c.name for c in self.client.get_collections().collections}
+        if collection_name in existing:
+            self.client.delete_collection(collection_name=collection_name)
 
     def _build_filter(self, filters: dict[str, Any] | None):
         if not filters:
@@ -299,6 +340,13 @@ class QdrantVectorStore(VectorStore):
                     match=self._models.MatchValue(value=filters["org_id"]),
                 )
             )
+        if "team_id" in filters:
+            conditions.append(
+                self._models.FieldCondition(
+                    key="team_id",
+                    match=self._models.MatchValue(value=filters["team_id"]),
+                )
+            )
         if not conditions:
             return None
         return self._models.Filter(must=conditions)
@@ -318,9 +366,11 @@ class ChromaVectorStore(VectorStore):
         self.collection_name = settings.qdrant_collection
         self._collection = None
 
-    def ensure_collection(self, dimension: int) -> None:
+    def _get_chroma_collection(self, collection_name: str | None = None):
+        dimension = settings.embedding_dimension
+        name = collection_name or self.collection_name
         try:
-            existing = self.client.get_collection(name=self.collection_name)
+            existing = self.client.get_collection(name=name)
             existing_dim = existing.metadata.get("dimension") if existing.metadata else None
 
             # Treat "no dimension recorded" the same as "mismatched dimension" —
@@ -336,32 +386,29 @@ class ChromaVectorStore(VectorStore):
                 logger.warning(
                     "ChromaDB collection '%s': %s. Deleting and recreating collection. "
                     "All previously indexed documents must be re-indexed.",
-                    self.collection_name, reason,
+                    name, reason,
                 )
-                self.client.delete_collection(name=self.collection_name)
-                self._collection = self.client.create_collection(
-                    name=self.collection_name,
+                self.client.delete_collection(name=name)
+                return self.client.create_collection(
+                    name=name,
                     metadata={"hnsw:space": "cosine", "dimension": dimension},
                 )
-            else:
-                self._collection = existing
+            return existing
         except Exception:
-            self._collection = self.client.get_or_create_collection(
-                name=self.collection_name,
+            return self.client.get_or_create_collection(
+                name=name,
                 metadata={"hnsw:space": "cosine", "dimension": dimension},
             )
 
-    @property
-    def collection(self):
-        if self._collection is None:
-            self.ensure_collection(settings.embedding_dimension)
-        return self._collection
+    def ensure_collection(self, dimension: int, collection_name: str | None = None) -> None:
+        self._get_chroma_collection(collection_name)
 
     def upsert(
         self,
         ids: list[str],
         vectors: list[list[float]],
         payloads: list[dict[str, Any]],
+        collection_name: str | None = None,
     ) -> None:
         documents = [p.get("text", "") for p in payloads]
         metadatas = []
@@ -372,7 +419,8 @@ class ChromaVectorStore(VectorStore):
                 if k != "text" and isinstance(v, (str, int, float, bool))
             }
             metadatas.append(meta)
-        self.collection.upsert(
+        collection = self._get_chroma_collection(collection_name)
+        collection.upsert(
             ids=ids,
             embeddings=vectors,
             documents=documents,
@@ -384,6 +432,7 @@ class ChromaVectorStore(VectorStore):
         query_vector: list[float],
         top_k: int = 5,
         filters: dict[str, Any] | None = None,
+        collection_name: str | None = None,
     ) -> list[SearchResult]:
         where = None
         if filters:
@@ -402,7 +451,8 @@ class ChromaVectorStore(VectorStore):
             elif len(clauses) > 1:
                 where = {"$and": clauses}
 
-        response = self.collection.query(
+        collection = self._get_chroma_collection(collection_name)
+        response = collection.query(
             query_embeddings=[query_vector],
             n_results=top_k,
             where=where,
@@ -430,11 +480,19 @@ class ChromaVectorStore(VectorStore):
             )
         return results
 
-    def delete_by_document(self, document_id: int) -> None:
-        self.collection.delete(where={"document_id": document_id})
+    def delete_by_document(self, document_id: int, collection_name: str | None = None) -> None:
+        collection = self._get_chroma_collection(collection_name)
+        collection.delete(where={"document_id": document_id})
 
-    def count(self) -> int:
-        return int(self.collection.count())
+    def count(self, collection_name: str | None = None) -> int:
+        collection = self._get_chroma_collection(collection_name)
+        return int(collection.count())
+
+    def delete_collection(self, collection_name: str) -> None:
+        try:
+            self.client.delete_collection(name=collection_name)
+        except Exception:
+            pass
 
 
 class PineconeVectorStore(VectorStore):
@@ -459,18 +517,21 @@ class PineconeVectorStore(VectorStore):
         ids: list[str],
         vectors: list[list[float]],
         payloads: list[dict[str, Any]],
+        collection_name: str | None = None,
     ) -> None:
+        namespace = collection_name or self.namespace
         records = [
             {"id": point_id, "values": vector, "metadata": _pinecone_safe_metadata(payload)}
             for point_id, vector, payload in zip(ids, vectors, payloads)
         ]
-        self.index.upsert(vectors=records, namespace=self.namespace)
+        self.index.upsert(vectors=records, namespace=namespace)
 
     def search(
         self,
         query_vector: list[float],
         top_k: int = 5,
         filters: dict[str, Any] | None = None,
+        collection_name: str | None = None,
     ) -> list[SearchResult]:
         pinecone_filter = None
         if filters:
@@ -482,11 +543,12 @@ class PineconeVectorStore(VectorStore):
             if "org_id" in filters:
                 pinecone_filter["org_id"] = {"$eq": filters["org_id"]}
 
+        namespace = collection_name or self.namespace
         response = self.index.query(
             vector=query_vector,
             top_k=top_k,
             include_metadata=True,
-            namespace=self.namespace,
+            namespace=namespace,
             filter=pinecone_filter or None,
         )
         results: list[SearchResult] = []
@@ -506,16 +568,18 @@ class PineconeVectorStore(VectorStore):
             )
         return results
 
-    def delete_by_document(self, document_id: int) -> None:
+    def delete_by_document(self, document_id: int, collection_name: str | None = None) -> None:
+        namespace = collection_name or self.namespace
         self.index.delete(
             filter={"document_id": {"$eq": document_id}},
-            namespace=self.namespace,
+            namespace=namespace,
         )
 
-    def count(self) -> int:
+    def count(self, collection_name: str | None = None) -> int:
+        namespace = collection_name or self.namespace
         stats = self.index.describe_index_stats()
         namespaces = stats.get("namespaces") or {}
-        ns_stats = namespaces.get(self.namespace) or {}
+        ns_stats = namespaces.get(namespace) or {}
         return int(ns_stats.get("vector_count", 0))
 
 

@@ -3,6 +3,7 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 
+from app.models.team import TeamMember, TeamMemberStatus
 from app.models.user import Document, DocumentStatus, OrgMember, User, UserRole
 from app.schemas.document import (
     DocumentContentResponse,
@@ -38,13 +39,25 @@ MIME_BY_TYPE = {
 
 
 def _can_access_document(db: DbSession, user: User, document: Document) -> bool:
-    """Access allowed if admin, document owner, or user belongs to the document's org."""
+    """Access allowed if admin, owner, org member, or team member."""
     if user.role == UserRole.ADMIN or document.owner_id == user.id:
         return True
     if document.org_id:
         membership = (
             db.query(OrgMember)
             .filter(OrgMember.org_id == document.org_id, OrgMember.user_id == user.id)
+            .first()
+        )
+        if membership:
+            return True
+    if document.team_id:
+        membership = (
+            db.query(TeamMember)
+            .filter(
+                TeamMember.team_id == document.team_id,
+                TeamMember.user_id == user.id,
+                TeamMember.status == TeamMemberStatus.ACTIVE,
+            )
             .first()
         )
         if membership:
@@ -129,8 +142,8 @@ def list_documents(
     skip: int = 0,
     limit: int = 50,
 ) -> DocumentListResponse:
-    """List documents. Optionally filter by org_id. Admins see all; employees see owned or org docs."""
-    query = db.query(Document)
+    """List personal/org documents. Team-scoped files are only listed under /teams/{id}/documents."""
+    query = db.query(Document).filter(Document.team_id.is_(None))
 
     if org_id is not None:
         # Validate membership if not admin
@@ -147,17 +160,8 @@ def list_documents(
                 )
         query = query.filter(Document.org_id == org_id)
     elif current_user.role != UserRole.ADMIN:
-        # Show owned documents OR documents belonging to user's orgs
-        user_org_ids = [
-            m.org_id
-            for m in db.query(OrgMember).filter(OrgMember.user_id == current_user.id).all()
-        ]
-        if user_org_ids:
-            query = query.filter(
-                (Document.owner_id == current_user.id) | (Document.org_id.in_(user_org_ids))
-            )
-        else:
-            query = query.filter(Document.owner_id == current_user.id)
+        # Personal workspace: owned docs only (team docs never appear here)
+        query = query.filter(Document.owner_id == current_user.id)
 
     total = query.count()
     documents = (

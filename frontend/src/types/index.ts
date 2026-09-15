@@ -27,6 +27,7 @@ export interface DocumentItem {
   file_type: string
   owner_id: number
   org_id?: number | null
+  team_id?: number | null
   file_size: number
   page_count: number | null
   chunk_count: number | null
@@ -119,6 +120,131 @@ export interface Organization {
 
 export interface OrgDetail extends Organization {
   members: OrgMember[]
+}
+
+export type TeamMemberRole = 'owner' | 'admin' | 'member'
+export type TeamInviteStatus = 'pending' | 'accepted' | 'rejected' | 'expired' | 'revoked'
+
+export interface Team {
+  id: number
+  name: string
+  description: string | null
+  owner_id: number
+  qdrant_collection_name: string
+  created_at: string
+  updated_at: string
+  member_count: number
+  my_role?: TeamMemberRole | null
+}
+
+export interface TeamMember {
+  id: number
+  team_id: number
+  user_id: number
+  role: TeamMemberRole
+  status: string
+  joined_at: string
+  user_email?: string | null
+  user_name?: string | null
+}
+
+export type TeamJoinRequestStatus = 'pending' | 'approved' | 'rejected'
+
+export interface TeamJoinCodePreview {
+  team_id: number
+  team_name: string
+  team_description: string | null
+  member_count: number
+}
+
+export interface TeamJoinRequest {
+  id: number
+  team_id: number
+  user_id: number
+  status: TeamJoinRequestStatus
+  message: string | null
+  reviewed_by: number | null
+  created_at: string
+  responded_at: string | null
+  user_email?: string | null
+  user_name?: string | null
+}
+
+export interface TeamDetail extends Team {
+  members: TeamMember[]
+  join_code?: string | null
+  pending_join_request_count?: number
+}
+
+export interface TeamInvite {
+  id: number
+  team_id: number
+  invited_email: string
+  invited_by: number | null
+  token: string
+  status: TeamInviteStatus
+  created_at: string
+  responded_at: string | null
+  expires_at: string | null
+  invite_url?: string | null
+}
+
+export interface TeamInvitePreview {
+  team_name: string
+  team_description: string | null
+  inviter_name: string | null
+  inviter_email: string | null
+  status: TeamInviteStatus
+  expires_at: string | null
+}
+
+export interface TeamChatMessage {
+  id: number
+  team_id: number
+  conversation_id: number
+  user_id: number | null
+  role: string
+  content: string
+  citations: Citation[] | null
+  created_at: string
+  author_name?: string | null
+}
+
+export interface TeamConversation {
+  id: number
+  team_id: number
+  title: string
+  created_at: string
+}
+
+export interface TeamConversationDetail extends TeamConversation {
+  messages: TeamChatMessage[]
+}
+
+export interface TeamChatQueryResponse {
+  conversation_id: number
+  question: string
+  answer: string
+  citations: Citation[]
+  message_id: number
+  provider: string
+  model: string
+  insufficient_information: boolean
+}
+
+export interface TeamMessengerMessage {
+  id: number
+  team_id: number
+  sender_id: number
+  content: string
+  message_type: 'text' | 'file'
+  file_document_id: number | null
+  reply_to_id: number | null
+  created_at: string
+  edited_at: string | null
+  deleted_at: string | null
+  sender_name?: string | null
+  read_by_user_ids: number[]
 }
 
 export interface InviteResponse {

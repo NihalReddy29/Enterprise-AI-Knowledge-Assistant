@@ -86,6 +86,8 @@ class RAGService:
         chat_history: list[dict[str, str]] | None = None,
         compare_mode: bool = False,
         org_id: int | None = None,
+        team_id: int | None = None,
+        collection_name: str | None = None,
     ) -> RAGResult:
         """Run the full RAG pipeline via LangGraph Corrective-RAG orchestrator."""
         from app.services.langgraph_orchestrator import build_corrective_rag_graph
@@ -98,6 +100,8 @@ class RAGService:
             "chat_history": chat_history,
             "compare_mode": compare_mode,
             "org_id": org_id,
+            "team_id": team_id,
+            "collection_name": collection_name,
             "rewrite_count": 0,
             "generation_count": 0,
             "max_rewrites": 2,

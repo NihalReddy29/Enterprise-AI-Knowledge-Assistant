@@ -17,6 +17,7 @@ class DocumentResponse(BaseModel):
     file_type: str
     owner_id: int
     org_id: int | None = None
+    team_id: int | None = None
     file_size: int
     page_count: int | None
     chunk_count: int | None = None

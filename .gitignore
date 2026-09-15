@@ -20,6 +20,6 @@ aws/terraform/.terraform/
 aws/terraform/*.tfstate*
 aws/terraform/terraform.tfvars
 aws/terraform/.terraform.lock.hcl
-"backend/app.db" 
+backend/app.db 
 ".vscode/" 
 .vscode/ 

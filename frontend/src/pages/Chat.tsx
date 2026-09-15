@@ -10,16 +10,29 @@ import {
   useDeleteConversation,
 } from '../hooks/useChat'
 import { useOrgs } from '../hooks/useOrgs'
+import {
+  useTeamChat,
+  useTeamConversation,
+  useTeamConversations,
+} from '../hooks/useTeams'
 import { useChatStore } from '../store/chatStore'
+import { useWorkspaceStore, workspaceLabel } from '../store/workspaceStore'
 import type { Citation } from '../types'
 import { useQueryClient } from '@tanstack/react-query'
 
 export function ChatPage() {
   const queryClient = useQueryClient()
+  const workspace = useWorkspaceStore((s) => s.workspace)
+  const isTeamWorkspace = workspace.type === 'team'
+  const teamId = isTeamWorkspace ? workspace.teamId : null
+
   const activeConversationId = useChatStore((s) => s.activeConversationId)
   const setActiveConversationId = useChatStore((s) => s.setActiveConversationId)
   const conversations = useConversations()
-  const conversation = useConversation(activeConversationId)
+  const conversation = useConversation(isTeamWorkspace ? null : activeConversationId)
+  const teamConversations = useTeamConversations(teamId)
+  const teamConversation = useTeamConversation(teamId, isTeamWorkspace ? activeConversationId : null)
+  const teamChat = useTeamChat()
   const remove = useDeleteConversation()
   const orgs = useOrgs()
 
@@ -35,7 +48,16 @@ export function ChatPage() {
   const [streamingQuestion, setStreamingQuestion] = useState('')
   const [streamingAnswer, setStreamingAnswer] = useState('')
 
-  const messages = conversation.data?.messages ?? []
+  const messages = isTeamWorkspace
+    ? (teamConversation.data?.messages ?? []).map((m) => ({
+        id: m.id,
+        conversation_id: m.conversation_id,
+        role: m.role as 'user' | 'assistant' | 'system',
+        content: m.content,
+        citations: m.citations,
+        created_at: m.created_at,
+      }))
+    : conversation.data?.messages ?? []
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -59,6 +81,28 @@ export function ChatPage() {
     if (!trimmed || isStreaming) return
 
     setError(null)
+
+    if (isTeamWorkspace && teamId) {
+      setQuestion('')
+      try {
+        const result = await teamChat.mutateAsync({
+          teamId,
+          question: trimmed,
+          conversation_id: activeConversationId,
+        })
+        setActiveConversationId(result.conversation_id)
+        await queryClient.invalidateQueries({
+          queryKey: ['team-conversations', teamId, result.conversation_id],
+        })
+        if (result.citations?.[0]) {
+          setSelectedCitation(result.citations[0])
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Team chat failed')
+      }
+      return
+    }
+
     setStreamingQuestion(trimmed)
     setStreamingAnswer('')
     setIsStreaming(true)
@@ -120,7 +164,13 @@ export function ChatPage() {
             </button>
           </div>
           <ul className="flex-1 space-y-1 overflow-y-auto p-2">
-            {conversations.data?.conversations.map((item) => (
+            {(isTeamWorkspace
+              ? teamConversations.data?.map((item) => ({
+                  id: item.id,
+                  title: item.title,
+                }))
+              : conversations.data?.conversations
+            )?.map((item) => (
               <li key={item.id}>
                 <button
                   type="button"
@@ -135,7 +185,9 @@ export function ChatPage() {
                 </button>
               </li>
             ))}
-            {!conversations.data?.conversations.length ? (
+            {!(isTeamWorkspace
+              ? teamConversations.data?.length
+              : conversations.data?.conversations.length) ? (
               <li className="px-3 py-4 text-xs text-ink-muted">No conversations yet.</li>
             ) : null}
           </ul>
@@ -147,11 +199,15 @@ export function ChatPage() {
           <div className="flex items-center justify-between border-b border-line px-4 py-3">
             <div>
               <h1 className="font-semibold text-ink">{title}</h1>
-              <p className="text-xs text-ink-muted">Answers grounded in indexed vector store.</p>
+              <p className="text-xs text-ink-muted">
+                {isTeamWorkspace
+                  ? `Team RAG · ${workspaceLabel(workspace)} knowledge base only`
+                  : 'Answers grounded in your personal indexed documents.'}
+              </p>
             </div>
 
             <div className="flex items-center gap-3">
-              {orgs.data?.length ? (
+              {!isTeamWorkspace && orgs.data?.length ? (
                 <div className="flex items-center gap-1.5">
                   <label className="text-xs text-ink-muted font-medium">Scope:</label>
                   <select

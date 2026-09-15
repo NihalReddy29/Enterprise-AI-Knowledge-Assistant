@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 
 from app.database import session as db_module
+from app.models.team import Team
 from app.models.user import Document, DocumentStatus
 from app.services.document_processor import get_document_processor
 from app.services.indexing import get_indexing_service
@@ -50,12 +51,20 @@ def process_document(document_id: int) -> None:
             document.updated_at = datetime.now(timezone.utc)
             db.commit()
 
+            collection_name = None
+            if document.team_id:
+                team = db.query(Team).filter(Team.id == document.team_id).first()
+                if team:
+                    collection_name = team.qdrant_collection_name
+
             index_result = indexing.index_document(
                 result=result,
                 document_id=document.id,
                 filename=document.filename,
                 owner_id=document.owner_id,
                 org_id=document.org_id,
+                team_id=document.team_id,
+                collection_name=collection_name,
             )
 
             document.chunk_count = index_result.chunk_count

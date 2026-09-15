@@ -43,6 +43,8 @@ class IndexingService:
         filename: str,
         owner_id: int,
         org_id: int | None = None,
+        team_id: int | None = None,
+        collection_name: str | None = None,
     ) -> IndexingResult:
         """Chunk, embed, and upsert document vectors."""
         chunks = self.chunking.chunk_extraction(
@@ -55,8 +57,8 @@ class IndexingService:
             raise ValueError("No chunks produced for indexing")
 
         # Replace existing vectors for this document
-        self.vector_store.delete_by_document(document_id)
-        self.vector_store.ensure_collection(self.embeddings.dimension)
+        self.vector_store.delete_by_document(document_id, collection_name=collection_name)
+        self.vector_store.ensure_collection(self.embeddings.dimension, collection_name=collection_name)
 
         texts = [chunk.text for chunk in chunks]
         vectors = self.embeddings.embed_texts(texts)
@@ -69,17 +71,23 @@ class IndexingService:
             meta = chunk.to_metadata()
             if org_id is not None:
                 meta["org_id"] = org_id
+            if team_id is not None:
+                meta["team_id"] = team_id
             payloads.append(meta)
 
-        self.vector_store.upsert(ids=ids, vectors=vectors, payloads=payloads)
+        self.vector_store.upsert(
+            ids=ids, vectors=vectors, payloads=payloads, collection_name=collection_name
+        )
 
         logger.info(
-            "Indexed document %d: %d chunks via %s → %s (org_id=%s)",
+            "Indexed document %d: %d chunks via %s → %s (org_id=%s, team_id=%s, collection=%s)",
             document_id,
             len(chunks),
             self.embeddings.provider_name,
             type(self.vector_store).__name__,
             org_id,
+            team_id,
+            collection_name,
         )
 
         return IndexingResult(
@@ -96,6 +104,8 @@ class IndexingService:
         owner_id: int | None = None,
         document_ids: list[int] | None = None,
         org_id: int | None = None,
+        team_id: int | None = None,
+        collection_name: str | None = None,
     ) -> list[SearchResult]:
         """Embed query and retrieve similar chunks."""
         query_vector = self.embeddings.embed_query(query)
@@ -106,16 +116,19 @@ class IndexingService:
             filters["document_ids"] = document_ids
         if org_id is not None:
             filters["org_id"] = org_id
+        if team_id is not None:
+            filters["team_id"] = team_id
 
         return self.vector_store.search(
             query_vector=query_vector,
             top_k=top_k,
             filters=filters or None,
+            collection_name=collection_name,
         )
 
-    def delete_document(self, document_id: int) -> None:
+    def delete_document(self, document_id: int, collection_name: str | None = None) -> None:
         """Remove document vectors from the store."""
-        self.vector_store.delete_by_document(document_id)
+        self.vector_store.delete_by_document(document_id, collection_name=collection_name)
 
     @staticmethod
     def _chunk_id(chunk: DocumentChunk) -> str:

@@ -62,6 +62,8 @@ def retrieve_hybrid_node(state: CorrectiveRAGState) -> dict[str, Any]:
     owner_id = state.get("owner_id")
     document_ids = state.get("document_ids")
     org_id = state.get("org_id")
+    team_id = state.get("team_id")
+    collection_name = state.get("collection_name")
     top_k = state.get("top_k", settings.vector_search_top_k)
 
     all_candidates: list[SearchResult] = []
@@ -74,6 +76,8 @@ def retrieve_hybrid_node(state: CorrectiveRAGState) -> dict[str, Any]:
             owner_id=owner_id,
             document_ids=document_ids,
             org_id=org_id,
+            team_id=team_id,
+            collection_name=collection_name,
         )
         for c in candidates:
             identity = (c.document_id, c.chunk_index, c.text.strip())

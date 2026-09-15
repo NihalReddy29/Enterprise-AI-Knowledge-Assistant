@@ -1,5 +1,21 @@
 """ORM models package."""
 
+from app.models.team import (
+    MessengerMessageType,
+    Notification,
+    Team,
+    TeamChatMessage,
+    TeamConversation,
+    TeamInvite,
+    TeamInviteStatus,
+    TeamJoinRequest,
+    TeamJoinRequestStatus,
+    TeamMember,
+    TeamMemberRole,
+    TeamMemberStatus,
+    TeamMessengerMessage,
+    TeamMessengerRead,
+)
 from app.models.user import (
     Conversation,
     Document,
@@ -30,5 +46,18 @@ __all__ = [
     "MessageRole",
     "Feedback",
     "QueryLog",
+    "Team",
+    "TeamMember",
+    "TeamMemberRole",
+    "TeamMemberStatus",
+    "TeamInvite",
+    "TeamInviteStatus",
+    "TeamJoinRequest",
+    "TeamJoinRequestStatus",
+    "TeamConversation",
+    "TeamChatMessage",
+    "TeamMessengerMessage",
+    "TeamMessengerRead",
+    "MessengerMessageType",
+    "Notification",
 ]
-

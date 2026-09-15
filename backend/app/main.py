@@ -10,7 +10,18 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from app.config import get_settings
-from app.routers import admin, auth, chat, documents, orgs, search
+from app.routers import (
+    admin,
+    auth,
+    chat,
+    documents,
+    orgs,
+    search,
+    team_chat,
+    team_documents,
+    team_messenger,
+    teams,
+)
 from app.database.base import Base
 from app.database.session import engine
 import app.models  # load all models
@@ -57,6 +68,11 @@ app.include_router(search.router, prefix=api_prefix)
 app.include_router(chat.router, prefix=api_prefix)
 app.include_router(admin.router, prefix=api_prefix)
 app.include_router(orgs.router, prefix=api_prefix)
+app.include_router(teams.router, prefix=api_prefix)
+app.include_router(team_documents.router, prefix=api_prefix)
+app.include_router(team_chat.router, prefix=api_prefix)
+app.include_router(team_messenger.router, prefix=api_prefix)
+app.include_router(team_messenger.ws_router)
 
 
 @app.get("/", tags=["Health"])

@@ -1,11 +1,14 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { InviteInbox } from './InviteInbox'
+import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 import { useAuthStore } from '../store/authStore'
 
 const links = [
   { to: '/', label: 'Dashboard' },
   { to: '/chat', label: 'Chat' },
   { to: '/documents', label: 'Documents' },
-  { to: '/organizations', label: 'Teams' },
+  { to: '/messenger', label: 'Messenger' },
+  { to: '/teams', label: 'Team settings' },
 ]
 
 export function AppLayout() {
@@ -55,6 +58,8 @@ export function AppLayout() {
             )}
           </nav>
           <div className="flex items-center gap-3 text-sm">
+            <WorkspaceSwitcher />
+            <InviteInbox />
             <div className="text-right">
               <p className="font-medium">{user?.name}</p>
               <p className="text-ink-muted capitalize">{user?.role}</p>

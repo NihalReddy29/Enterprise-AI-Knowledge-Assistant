@@ -14,6 +14,8 @@ class CorrectiveRAGState(TypedDict, total=False):
     owner_id: int | None
     document_ids: list[int] | None
     org_id: int | None
+    team_id: int | None
+    collection_name: str | None
     top_k: int
     chat_history: list[dict[str, str]] | None
     compare_mode: bool

@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { getErrorMessage } from '../api/client'
 import { DocumentUpload } from '../components/DocumentUpload'
 import { useDeleteDocument, useDocuments } from '../hooks/useDocuments'
+import { useDeleteTeamDocument, useTeamDocuments } from '../hooks/useTeams'
+import { useWorkspaceStore, workspaceLabel } from '../store/workspaceStore'
 import { useOrgs, usePublishDocument, useUnpublishDocument } from '../hooks/useOrgs'
 import type { DocumentStatus } from '../types'
 
@@ -20,8 +22,13 @@ function formatBytes(size: number) {
 }
 
 export function DocumentsPage() {
-  const documents = useDocuments(4000)
-  const remove = useDeleteDocument()
+  const workspace = useWorkspaceStore((s) => s.workspace)
+  const teamId = workspace.type === 'team' ? workspace.teamId : null
+  const personalDocs = useDocuments(teamId ? false : 4000)
+  const teamDocs = useTeamDocuments(teamId, teamId ? 4000 : false)
+  const documents = teamId ? teamDocs : personalDocs
+  const removePersonal = useDeleteDocument()
+  const removeTeam = useDeleteTeamDocument()
   const orgs = useOrgs()
   const publish = usePublishDocument()
   const unpublish = useUnpublishDocument()
@@ -52,11 +59,16 @@ export function DocumentsPage() {
       <div>
         <h1 className="font-display text-4xl tracking-tight">Documents</h1>
         <p className="mt-2 text-ink-muted">
-          Upload and monitor indexing status across your knowledge base and shared team libraries.
+          {workspace.type === 'team'
+            ? `Team knowledge base for ${workspace.teamName} — isolated from personal and other teams.`
+            : 'Your personal knowledge base — upload and monitor indexing status.'}
+        </p>
+        <p className="mt-1 text-xs font-medium text-accent">
+          Active workspace: {workspaceLabel(workspace)}
         </p>
       </div>
 
-      <DocumentUpload />
+      <DocumentUpload teamId={teamId} />
 
       <div className="overflow-hidden rounded-xl border border-line bg-panel">
         <div className="border-b border-line px-4 py-3 text-sm font-medium">
@@ -64,9 +76,11 @@ export function DocumentsPage() {
         </div>
         {documents.isLoading ? (
           <p className="px-4 py-8 text-sm text-ink-muted">Loading documents…</p>
-        ) : documents.data?.documents.length ? (
+        ) : documents.data?.documents.filter((doc) => teamId || !doc.team_id).length ? (
           <ul className="divide-y divide-line">
-            {documents.data.documents.map((doc) => {
+            {documents.data.documents
+              .filter((doc) => teamId || !doc.team_id)
+              .map((doc) => {
               const matchedOrg = orgs.data?.find((o) => o.id === doc.org_id)
               return (
                 <li key={doc.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
@@ -96,8 +110,8 @@ export function DocumentsPage() {
                       {doc.status}
                     </span>
 
-                    {/* Org publish/unpublish action */}
-                    {orgs.data?.length ? (
+                    {/* Org publish/unpublish action (personal workspace only) */}
+                    {!teamId && orgs.data?.length ? (
                       doc.org_id ? (
                         <button
                           type="button"
@@ -157,7 +171,11 @@ export function DocumentsPage() {
                       onClick={async () => {
                         if (!confirm(`Delete ${doc.filename}?`)) return
                         try {
-                          await remove.mutateAsync(doc.id)
+                          if (teamId) {
+                            await removeTeam.mutateAsync({ teamId, documentId: doc.id })
+                          } else {
+                            await removePersonal.mutateAsync(doc.id)
+                          }
                         } catch (error) {
                           alert(getErrorMessage(error))
                         }

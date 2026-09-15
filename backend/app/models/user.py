@@ -1,13 +1,19 @@
 """SQLAlchemy ORM models."""
 
+from __future__ import annotations
+
 import enum
 from datetime import datetime
+from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
 from app.database.base import Base
+
+if TYPE_CHECKING:
+    from app.models.team import Notification, Team, TeamMember
 
 
 class UserRole(str, enum.Enum):
@@ -75,6 +81,21 @@ class User(Base):
     )
     org_memberships: Mapped[list["OrgMember"]] = relationship(
         "OrgMember",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    owned_teams: Mapped[list["Team"]] = relationship(
+        "Team",
+        back_populates="owner",
+        foreign_keys="Team.owner_id",
+    )
+    team_memberships: Mapped[list["TeamMember"]] = relationship(
+        "TeamMember",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    notifications: Mapped[list["Notification"]] = relationship(
+        "Notification",
         back_populates="user",
         cascade="all, delete-orphan",
     )
@@ -186,6 +207,9 @@ class Document(Base):
     org_id: Mapped[int | None] = mapped_column(
         ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    team_id: Mapped[int | None] = mapped_column(
+        ForeignKey("teams.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -212,6 +236,14 @@ class Document(Base):
     owner: Mapped["User"] = relationship("User", back_populates="documents")
     organization: Mapped["Organization | None"] = relationship(
         "Organization", back_populates="documents"
+    )
+    team: Mapped["Team | None"] = relationship("Team", back_populates="documents")
+
+    __table_args__ = (
+        CheckConstraint(
+            "(team_id IS NULL) OR (org_id IS NULL)",
+            name="ck_documents_team_org_exclusive",
+        ),
     )
 
 

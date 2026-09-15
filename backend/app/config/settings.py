@@ -103,6 +103,15 @@ class Settings(BaseSettings):
     rag_history_turns: int = 6
     rag_min_similarity: float = 0.0
 
+    # Email / team invites
+    frontend_url: str = "http://localhost:5173"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_use_tls: bool = True
+    team_invite_expire_days: int = 7
 
     @field_validator("cors_origins", mode="before")
     @classmethod

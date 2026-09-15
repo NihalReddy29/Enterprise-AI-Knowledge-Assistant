@@ -12,7 +12,15 @@ from app.models import (  # noqa: F401 - register models with metadata
     Document,
     Feedback,
     Message,
+    Notification,
     QueryLog,
+    Team,
+    TeamChatMessage,
+    TeamConversation,
+    TeamInvite,
+    TeamMember,
+    TeamMessengerMessage,
+    TeamMessengerRead,
     User,
 )
 

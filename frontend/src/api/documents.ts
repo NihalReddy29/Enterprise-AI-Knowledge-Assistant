@@ -12,9 +12,6 @@ export async function uploadDocument(file: File): Promise<{ document: DocumentIt
   const { data } = await api.post<{ document: DocumentItem; message: string }>(
     '/documents/upload',
     form,
-    {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    },
   )
   return data
 }

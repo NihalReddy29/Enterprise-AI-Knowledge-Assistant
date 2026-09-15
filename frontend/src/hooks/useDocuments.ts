@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { deleteDocument, listDocuments, uploadDocument } from '../api/documents'
 
-export function useDocuments(refetchInterval?: number | false) {
+export function useDocuments(refetchInterval?: number | false, enabled = true) {
   return useQuery({
     queryKey: ['documents'],
     queryFn: listDocuments,
     refetchInterval,
+    enabled,
   })
 }
 
